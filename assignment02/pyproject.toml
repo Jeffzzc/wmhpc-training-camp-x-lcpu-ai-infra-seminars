@@ -10,3 +10,7 @@ tilelang = ["tilelang==0.1.13"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
