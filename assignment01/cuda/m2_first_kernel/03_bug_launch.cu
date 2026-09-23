@@ -32,6 +32,7 @@ int main() {
     int blocks = (n + threads - 1) / threads;
     vectorAdd<<<blocks, threads>>>(d_a, d_b, d_c, n);
     // 注意：这里故意没有做任何错误检查。
+    CUDA_CHECK_KERNEL();
 
     CUDA_CHECK(cudaMemcpy(h_c, d_c, bytes, cudaMemcpyDeviceToHost));
     REPORT(check_close(h_c, h_ref, n));
@@ -41,3 +42,15 @@ int main() {
 // 提示：kernel 启动语句后面补一行 CUDA_CHECK_KERNEL() 再跑一次，
 // 报错信息会告诉你该往哪个方向查。查完记得回答：为什么不加这一行时
 // 程序一声不吭？（问题 0.2 打印过的哪个上限和这里有关？）
+
+/*
+    Bug： threads = 2048，导致 vectorAdd<<<blocks, threads>>> 每个 block 启动 2048 个线程，
+    超过 GPU 的 maxThreadsPerBlock（通常为 1024），因此 kernel launch 失败。
+    加入 CUDA_CHECK_KERNEL() 后可以检测到 launch error，运行时报告 invalid argument。
+
+    为什么原程序一声不吭： CUDA kernel launch 不会自动把错误打印到终端。
+    launch configuration 错误会记录在 CUDA runtime 的错误状态中，
+    如果 kernel 后没有调用 cudaGetLastError()（这里由 CUDA_CHECK_KERNEL() 封装），
+    程序会继续执行。由于之前使用 cudaMemset(d_c, 0, bytes) 将输出清零，
+    而失败的 kernel 没有更新 d_c，最终复制回 CPU 的仍然全是 0，因此 check_close 输出 FAIL。
+*/
