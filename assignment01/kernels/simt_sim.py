@@ -20,4 +20,38 @@ contract: 实现 run(program) -> (regs, cycles)
 
 
 def run(program):
-    raise NotImplementedError("从这里开始写")
+    # raise NotImplementedError("从这里开始写")
+    LANES = 32
+    regs = list(range(LANES))
+    cycles = 0
+    
+    def exec_prog(prog, mask):
+        nonlocal cycles
+        for inst in prog:
+            op = inst[0]
+            if op == "add":
+                k = inst[1]
+                for i in range(LANES):
+                    if mask[i]:
+                        regs[i] += k
+                cycles += 1
+            elif op == "mul":
+                k = inst[1]
+                for i in range(LANES):
+                    if mask[i]:
+                        regs[i] *= k
+                cycles += 1
+            elif op == "if_lt":
+                t, then_prog, else_prog = inst[1], inst[2], inst[3]
+                then_mask = [mask[i] and regs[i] < t for i in range(LANES)]
+                else_mask = [mask[i] and not then_mask[i] for i in range(LANES)]
+                if any(then_mask):
+                    exec_prog(then_prog, then_mask)
+                if any(else_mask):
+                    exec_prog(else_prog, else_mask)
+            else:
+                raise ValueError(f"unknown instruction {op}")
+    
+    full_mask = [True] * LANES
+    exec_prog(program, full_mask)
+    return regs, cycles
