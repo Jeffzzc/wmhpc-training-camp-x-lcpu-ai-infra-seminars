@@ -1,0 +1,2 @@
+(a) 注释掉 __syncthreads() 后，由于不同 Warp 的执行进度可能不同，有些线程会在其他线程写入 Shared Memory 之前就读取对应位置，造成数据竞争，导致结果错误。__syncthreads() 可以保证 Block 内所有线程完成写入后再进行读取。
+(b) 每个 Block 有 8 个 Warp，线程 t 所属的 Warp 为 \(\lfloor t/32\rfloor\)，而线程 255-t 所属的 Warp 为 \(7-\lfloor t/32\rfloor\)，因此两者不可能属于同一个 Warp。某些位置经常正确，是因为负责写入的 Warp 恰好先完成了写入，而其他位置可能因为读取过早而错误。由于 Warp 之间没有同步，结果取决于执行时序，不能保证正确性。

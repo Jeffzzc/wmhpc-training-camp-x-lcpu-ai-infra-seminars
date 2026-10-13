@@ -1,0 +1,53 @@
+__syncthreads 只能同步本 block 内的 threads，那需要全 grid 同步时，标准做法是什么？
+
+CUDA 中，实现整个 Grid 的全局同步，最标准、最常用的做法是：
+把计算拆成两个 Kernel，利用 Kernel 之间的执行顺序作为全局同步屏障。
+此外，CUDA 也提供 Cooperative Groups，允许在满足一定条件时，在同一个 Kernel 内实现 Grid 级同步。
+
+正确做法
+将代码拆成两个 Kernel：
+__global__ void kernel1(float* data) {
+    // 第一阶段计算
+}
+
+__global__ void kernel2(float* data) {
+    // 第二阶段计算
+}
+
+int main() {
+    kernel1<<<1024, 256>>>(d_data);
+
+    kernel2<<<1024, 256>>>(d_data);
+
+    cudaDeviceSynchronize();
+}
+
+为什么不需要在两个 Kernel 之间加 cudaDeviceSynchronize()？
+因为它们默认在同一个 CUDA Stream 中启动，而同一个 Stream 内的操作按照顺序执行。
+因此：
+Kernel 1 全部完成 -> Kernel 2 才开始
+
+即使 kernel1 和 kernel2 的启动对 CPU 来说是异步的，GPU 也会保证这个顺序。
+最后的 cudaDeviceSynchronize() 是为了让 CPU 等待 GPU 完成计算，而不是为了让两个 Kernel 之间同步。
+如果两个 Kernel 在不同 Stream 中，则需要额外建立依赖，例如使用 CUDA Event。
+
+
+如果一定要在同一个 Kernel 内同步呢？
+可以使用 CUDA 的 Cooperative Groups。
+例如：
+#include <cooperative_groups.h>
+
+namespace cg = cooperative_groups;
+
+__global__ void kernel(float* data) {
+    cg::grid_group grid = cg::this_grid();
+
+    // 第一阶段
+    do_stage1();
+
+    // 整个 Grid 同步
+    grid.sync();
+
+    // 第二阶段
+    do_stage2();
+}

@@ -34,17 +34,96 @@
 //
 // 选做第三版（shuffle 版）时：测试只会跑上面两个 kernel，自己在 main 里
 // 照着加一次 run_one 调用即可，不影响前两版的测试。
+
+// 这道题实际上是在依次理解 CUDA reduction 的三个层次：
+// 1. 交错式 shared-memory reduction
+// 2. 连续式 shared-memory reduction
+// 3. shared memory + warp shuffle 优化
+
 #include "common.h"
 
 #define BLOCK 256
 
 __global__ void reduce_interleaved(const float *in, float *out) {
     // TODO：从这里开始写（交错配对版本）
+    __shared__ float buf[BLOCK];
+    int tid = threadIdx.x;
+    int base = blockDim.x * blockIdx.x;
+
+    buf[tid] = in[base + tid];
+    __syncthreads();
+
+    for (int s = 1; s < blockDim.x; s *= 2) {
+        if (tid % (2 * s) == 0) {
+            buf[tid] += buf[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        out[blockIdx.x] = buf[0];
+    }
 }
 
 __global__ void reduce_contiguous(const float *in, float *out) {
     // TODO：从这里开始写（连续配对版本）
+    __shared__ float buf[BLOCK];
+    int tid = threadIdx.x;
+    int base = blockDim.x * blockIdx.x;
+
+    buf[tid] = in[base + tid];
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s >= 1; s /= 2) {
+        if (tid < s) {
+            buf[tid] += buf[tid + s];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        out[blockIdx.x] = buf[0];
+    }
 }
+
+__global__ void reduce_shuffle(const float *in, float *out) {
+    __shared__ float buf[BLOCK];
+
+    int tid = threadIdx.x;
+    int base = blockIdx.x * blockDim.x;
+
+    buf[tid] = in[base + tid];
+    __syncthreads();
+
+    // 256 -> 128 -> 64 -> 32
+    //
+    // 最后只留下前 32 个线程对应的数据
+    for (int s = blockDim.x / 2; s > 32; s /= 2) {
+        if (tid < s) {
+            buf[tid] += buf[tid + s];
+        }
+        __syncthreads();
+    }
+
+    // 此时还需要完成 64 -> 32
+    if (tid < 32) {
+        float val = buf[tid] + buf[tid + 32];
+
+        // 接下来数据全部存在 warp 0 的寄存器中
+        unsigned mask = 0xffffffff;
+
+        val += __shfl_down_sync(mask, val, 16);
+        val += __shfl_down_sync(mask, val, 8);
+        val += __shfl_down_sync(mask, val, 4);
+        val += __shfl_down_sync(mask, val, 2);
+        val += __shfl_down_sync(mask, val, 1);
+
+        if (tid == 0) {
+            out[blockIdx.x] = val;
+        }
+    }
+}
+
 
 // ---------------- 以下是判测与计时，不要修改 ----------------
 
@@ -97,6 +176,8 @@ int main() {
     float ms_i = run_one(reduce_interleaved, "interleaved", d_in, d_out, h_out,
                          h_partial, nblocks);
     float ms_c = run_one(reduce_contiguous, "contiguous ", d_in, d_out, h_out,
+                         h_partial, nblocks);
+    float ms_s = run_one(reduce_shuffle, "shuffle ", d_in, d_out, h_out,
                          h_partial, nblocks);
     // 阈值 1.5x：A100 实测 2.22x、V100 实测 2.33x，两版写成一样时是 ~1x。
     float ratio = report_speedup("interleaved / contiguous", ms_i, ms_c, 1.5f,
